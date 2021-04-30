@@ -15,8 +15,8 @@ import (
 	"golang.org/x/net/html"
 )
 
-func loadChunk(chunkUrl *url.URL, fileName string, attempts byte) {
-	action := func(chunkUrl *url.URL, fileName string) error {
+func loadChunk(chunkUrl *url.URL, attempts byte) {
+	action := func(chunkUrl *url.URL) error {
 		bodyReader, err := func() (io.Reader, error) {
 			response, err := http.Get(chunkUrl.String())
 			if err != nil {
@@ -31,13 +31,7 @@ func loadChunk(chunkUrl *url.URL, fileName string, attempts byte) {
 			return err
 		}
 
-		file, err := os.Create(fileName)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-	
-		_, err = io.Copy(file, bodyReader)
+		_, err = io.Copy(os.Stdout, bodyReader)
 		if err != nil {
 			return err
 		}
@@ -46,16 +40,16 @@ func loadChunk(chunkUrl *url.URL, fileName string, attempts byte) {
 
 	var attempt byte = 0
 	var multiplier float32 = 1
-	err := action(chunkUrl, fileName)
+	err := action(chunkUrl)
 	for err != nil && attempt < attempts {
 		fmt.Fprintln(
 			os.Stderr,
-			fmt.Sprintf("Get error from '%s': %s", fileName, err.Error()),
+			fmt.Sprintf("Get error from '%s': %s", chunkUrl.String(), err.Error()),
 		)
 		time.Sleep(1000 * time.Duration(multiplier) * time.Millisecond)
 		attempt++
 		multiplier *= rand.Float32() * 10.0
-		err = action(chunkUrl, fileName)
+		err = action(chunkUrl)
 	}
 	if err != nil {
 		panic(err)
@@ -123,8 +117,8 @@ func loadVideo(playlistUrl *url.URL, resolution string) error {
 		}
 	}
 
-	for chunkIndex, chunkUrl := range chunkUrlsList {
-		loadChunk(chunkUrl, fmt.Sprintf("media_%d.ts", chunkIndex), 10)
+	for _, chunkUrl := range chunkUrlsList {
+		loadChunk(chunkUrl, 10)
 	}
 
 	return nil
