@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 	"net/url"
@@ -56,7 +57,7 @@ func loadChunk(chunkUrl *url.URL, attempts byte) {
 	}
 }
 
-func loadVideo(playlistUrl *url.URL, resolution string) error {
+func loadVideo(playlistUrl *url.URL, resolution string, attempts byte) error {
 	response, err := http.Get(playlistUrl.String())
 	if err != nil {
 		return err
@@ -118,7 +119,7 @@ func loadVideo(playlistUrl *url.URL, resolution string) error {
 	}
 
 	for _, chunkUrl := range chunkUrlsList {
-		loadChunk(chunkUrl, 10)
+		loadChunk(chunkUrl, attempts)
 	}
 
 	return nil
@@ -171,18 +172,15 @@ func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 }
 
 func main() {
-	errorMessages := []string{}
 	if len(os.Args) < 2 {
-		errorMessages = append(errorMessages, "URL argument required!")
+		fmt.Fprintln(os.Stderr, "URL argument required!")
 	}
 	if len(os.Args) < 3 {
-		errorMessages = append(errorMessages, "RES argument required!")
+		fmt.Fprintln(os.Stderr, "RES argument required!")
 	}
-	if len(errorMessages) > 0 {
-		for _, errorMessage := range errorMessages {
-			fmt.Fprintln(os.Stderr, errorMessage)
-		}
-		fmt.Fprintln(os.Stderr, "Format: platformcraft_video_loader <URL> <RES>")
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "ATTEMPTS argument required!")
+		fmt.Fprintln(os.Stderr, "Format: platformcraft_video_loader <URL> <RES> <ATTEMPTS>")
 		os.Exit(1)
 	}
 
@@ -192,6 +190,10 @@ func main() {
 		os.Exit(1)
 	}
 	resolution := os.Args[2]
+	attempts, err := strconv.ParseInt(os.Args[3], 0, 8)
+	if err != nil {
+		panic(err)
+	}
 
 	response, err := http.Get(pageUrl.String())
 	if err != nil {
@@ -201,7 +203,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = loadVideo(playlistUrl, resolution) // 1280x720
+	err = loadVideo(playlistUrl, resolution, byte(attempts))
 	if err != nil {
 		panic(err)
 	}
