@@ -16,7 +16,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-func loadChunk(chunkUrl *url.URL, attempts byte) {
+func loadChunk(chunkUrl *url.URL, attempts int) {
 	action := func(chunkUrl *url.URL) error {
 		bodyReader, err := func() (io.Reader, error) {
 			response, err := http.Get(chunkUrl.String())
@@ -39,7 +39,7 @@ func loadChunk(chunkUrl *url.URL, attempts byte) {
 		return nil
 	}
 
-	var attempt byte = 0
+	var attempt int = 0
 	var multiplier float32 = 1
 	err := action(chunkUrl)
 	for err != nil && attempt < attempts {
@@ -57,7 +57,7 @@ func loadChunk(chunkUrl *url.URL, attempts byte) {
 	}
 }
 
-func loadVideo(playlistUrl *url.URL, resolution string, attempts byte) error {
+func loadVideo(playlistUrl *url.URL, resolution string, attempts int) error {
 	response, err := http.Get(playlistUrl.String())
 	if err != nil {
 		return err
@@ -177,22 +177,42 @@ func main() {
 	}
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "RES argument required!")
-	}
-	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "ATTEMPTS argument required!")
-		fmt.Fprintln(os.Stderr, "Format: platformcraft_video_loader <URL> <RES> <ATTEMPTS>")
+		fmt.Fprintln(
+			os.Stderr,
+			"Format: platformcraft_video_loader <URL> <RES> [<ATTEMPTS>] [<ROUTINES>]",
+		)
+		fmt.Fprintln(os.Stderr, "Default values: ATTEMPTS=10, ROUTINES=1")
 		os.Exit(1)
 	}
 
+	var attempts int = 10
+	var routines int = 1
+	var err error
 	pageUrl, err := url.Parse(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "URL incorrect")
 		os.Exit(1)
 	}
 	resolution := os.Args[2]
-	attempts, err := strconv.ParseInt(os.Args[3], 0, 8)
-	if err != nil {
-		panic(err)
+	if len(os.Args) > 3 {
+		attempts, err = strconv.Atoi(os.Args[3])
+		if err != nil {
+			panic(err)
+		}
+	}
+	if attempts < 1 {
+		fmt.Fprintln(os.Stderr, "ATTEMPTS must be more than 0")
+		os.Exit(1)
+	}
+	if len(os.Args) == 5 {
+		routines, err = strconv.Atoi(os.Args[4])
+		if err != nil {
+			panic(err)
+		}
+	}
+	if routines < 1 {
+		fmt.Fprintln(os.Stderr, "ROUTINES must be more than 0")
+		os.Exit(1)
 	}
 
 	response, err := http.Get(pageUrl.String())
@@ -203,7 +223,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = loadVideo(playlistUrl, resolution, byte(attempts))
+	err = loadVideo(playlistUrl, resolution, attempts)
 	if err != nil {
 		panic(err)
 	}
