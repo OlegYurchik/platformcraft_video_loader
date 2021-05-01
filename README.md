@@ -9,14 +9,14 @@ go build
 ## Run
 
 ```shell
-platformcraft_video_loader <URL> <RES> [<ATTEMPTS>] [<ROUTINES>] > output.mp4
+platformcraft_video_loader <URL> <RES> [<ROUTINES>] [<ATTEMPTS>] > output.mp4
 ```
 
 Where `<URL>` - url of page with video, `<RES>` - resolution,
-`<ATTEMPTS>` - attempts count for retry, `<ROUTINES>` - parralel working routines count,
+`<ROUTINES>` - parralel working routines count, `<ATTEMPTS>` - attempts count for retry,
 `<output.mp4>` - filename for save result file
 
-By default `ATTEMPTS` is 10, `ROUTINES` is 1
+By default `ATTEMPTS` is 3, `ROUTINES` is 1
 
 Example:
 

@@ -5,43 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"net/url"
 
 	"golang.org/x/net/html"
 )
 
-func loadChunk(chunkUrl *url.URL, attempts int) {
-	action := func(chunkUrl *url.URL) error {
-		bodyReader, err := func() (io.Reader, error) {
-			response, err := http.Get(chunkUrl.String())
-			if err != nil {
-				return nil, err
-			}
-			if response.StatusCode != 200 {
-				return nil, errors.New("Invalid status code: '" + response.Status + "'")
-			}
-			return response.Body, nil
-		}()
+type empty struct{}
+
+func loadChunk(chunkUrl *url.URL, attempts int, doneCh chan empty, dataCh chan<-[]byte) {
+	defer func(){<-doneCh}()
+
+	action := func(chunkUrl *url.URL, dataCh chan<-[]byte) error {
+		response, err := http.Get(chunkUrl.String())
+		if err != nil {
+			return err
+		}
+		if response.StatusCode != 200 {
+			return errors.New("Invalid status code: '" + response.Status + "'")
+		}
 		if err != nil {
 			return err
 		}
 
-		_, err = io.Copy(os.Stdout, bodyReader)
+		data, err := ioutil.ReadAll(response.Body)
 		if err != nil {
 			return err
 		}
+		dataCh <- data
+
 		return nil
 	}
 
 	var attempt int = 0
 	var multiplier float32 = 1
-	err := action(chunkUrl)
+	err := action(chunkUrl, dataCh)
 	for err != nil && attempt < attempts {
 		fmt.Fprintln(
 			os.Stderr,
@@ -50,22 +55,58 @@ func loadChunk(chunkUrl *url.URL, attempts int) {
 		time.Sleep(1000 * time.Duration(multiplier) * time.Millisecond)
 		attempt++
 		multiplier *= rand.Float32() * 10.0
-		err = action(chunkUrl)
+		err = action(chunkUrl, dataCh)
 	}
 	if err != nil {
 		panic(err)
 	}
 }
 
-func loadVideo(playlistUrl *url.URL, resolution string, attempts int) error {
-	response, err := http.Get(playlistUrl.String())
-	if err != nil {
-		return err
+func loadVideo(reader io.Reader, chunkListUrl *url.URL, attempts int, routines int) error {
+	scanner := bufio.NewScanner(reader)
+	chunkUrlsList := []*url.URL{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line[0] != '#' {
+			lineUrl, err := url.Parse(line)
+			if err != nil {
+				return err
+			}
+			lineUrl = chunkListUrl.ResolveReference(lineUrl)
+			chunkUrlsList = append(chunkUrlsList, lineUrl)
+		}
 	}
 
-	prefix := "#EXT-X-STREAM-INF:"
-	scanner := bufio.NewScanner(response.Body)
+	var wg sync.WaitGroup
+	doneCh := make(chan empty, routines)
+	dataChs := []chan[]byte{}
+	for index := 0; index < len(chunkUrlsList); index++ {
+		dataCh := make(chan []byte, 1)
+		dataChs = append(dataChs, dataCh)
+	}
+	go func() {
+		wg.Add(1)
+		for _, dataCh := range dataChs {
+			os.Stdout.Write(<-dataCh)
+		}
+		wg.Done()
+	}()
+
+	for index, chunkUrl := range chunkUrlsList {
+		doneCh <- empty{}
+		go loadChunk(chunkUrl, attempts, doneCh, dataChs[index])
+	}
+	wg.Wait()
+
+	return nil
+}
+
+func getChunkListUrl(reader io.Reader, resolution string) (*url.URL, error) {
 	var chunkListUrl *url.URL
+	var err error
+
+	prefix := "#EXT-X-STREAM-INF:"
+	scanner := bufio.NewScanner(reader)
 	foundChunkListUrl := false
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -85,47 +126,22 @@ func loadVideo(playlistUrl *url.URL, resolution string, attempts int) error {
 		} else if line[0] != '#' && foundChunkListUrl {
 			chunkListUrl, err = url.Parse(line)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			break
+			return chunkListUrl, nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
-        return err
+        return nil, err
     }
-	if chunkListUrl == nil {
-		return errors.New(
-			fmt.Sprintf("Have no chunklist url with resolution '%s'", resolution),
-		)
-	}
-
-	response, err = http.Get(chunkListUrl.String())
-	if err != nil {
-		return err
-	}
-
-	scanner = bufio.NewScanner(response.Body)
-	chunkUrlsList := []*url.URL{}
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line[0] != '#' {
-			lineUrl, err := url.Parse(line)
-			if err != nil {
-				return err
-			}
-			lineUrl = chunkListUrl.ResolveReference(lineUrl)
-			chunkUrlsList = append(chunkUrlsList, lineUrl)
-		}
-	}
-
-	for _, chunkUrl := range chunkUrlsList {
-		loadChunk(chunkUrl, attempts)
-	}
-
-	return nil
+	return nil, errors.New(
+		fmt.Sprintf("Have no chunklist url with resolution '%s'", resolution),
+	)
 }
 
-func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
+func getPlaylistUrl(reader io.Reader, pageUrl *url.URL) (*url.URL, error) {
+	var keyBytes, valueBytes []byte
+	var key, value string
 	tokenizer := html.NewTokenizer(reader)
 
 	for {
@@ -134,20 +150,18 @@ func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 			case html.ErrorToken:
 				return nil, tokenizer.Err()
 			case html.StartTagToken:
-				tagNameBytes, hasAttr := tokenizer.TagName()
-				tagName := string(tagNameBytes)
-				if tagName == "source" && hasAttr {
-					var keyBytes, valueBytes []byte
-					key, value, moreAttr := "", "", true
-					for key != "src" && moreAttr {
-						keyBytes, valueBytes, moreAttr = tokenizer.TagAttr()
+				tagName, hasAttr := tokenizer.TagName()
+				if string(tagName) == "source" && hasAttr {
+					for key != "src" && hasAttr {
+						keyBytes, valueBytes, hasAttr = tokenizer.TagAttr()
 						key, value = string(keyBytes), string(valueBytes)
 					}
 					if key == "src" {
-						playlistUrl, err := url.Parse(scheme + ":" + value)
+						playlistUrl, err := url.Parse(value)
 						if err != nil {
 							return nil, err
 						}
+						playlistUrl = pageUrl.ResolveReference(playlistUrl)
 						return playlistUrl, nil
 					}
 				}
@@ -157,6 +171,11 @@ func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 }
 
 func main() {
+	var attempts int = 3
+	var routines int = 1
+	var err error
+
+	// Check arguments coount
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "URL argument required!")
 	}
@@ -164,51 +183,61 @@ func main() {
 		fmt.Fprintln(os.Stderr, "RES argument required!")
 		fmt.Fprintln(
 			os.Stderr,
-			"Format: platformcraft_video_loader <URL> <RES> [<ATTEMPTS>] [<ROUTINES>]",
+			"Format: platformcraft_video_loader <URL> <RES> [<ROUTINES>] [<ATTEMPTS>]",
 		)
-		fmt.Fprintln(os.Stderr, "Default values: ATTEMPTS=10, ROUTINES=1")
+		fmt.Fprintln(os.Stderr, "Default values: ROUTINES=1, ATTEMPTS=3")
 		os.Exit(1)
 	}
 
-	var attempts int = 10
-	var routines int = 1
-	var err error
+	// Getting arguments values
 	pageUrl, err := url.Parse(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "URL incorrect")
 		os.Exit(1)
 	}
 	resolution := os.Args[2]
-	if len(os.Args) > 3 {
-		attempts, err = strconv.Atoi(os.Args[3])
+	if len(os.Args) < 4 {
+		routines, err = strconv.Atoi(os.Args[3])
 		if err != nil {
 			panic(err)
 		}
-	}
-	if attempts < 1 {
-		fmt.Fprintln(os.Stderr, "ATTEMPTS must be more than 0")
-		os.Exit(1)
+		if routines < 1 {
+			fmt.Fprintln(os.Stderr, "ROUTINES must be more than 0")
+			os.Exit(1)
+		}
 	}
 	if len(os.Args) == 5 {
-		routines, err = strconv.Atoi(os.Args[4])
+		attempts, err = strconv.Atoi(os.Args[4])
 		if err != nil {
 			panic(err)
 		}
-	}
-	if routines < 1 {
-		fmt.Fprintln(os.Stderr, "ROUTINES must be more than 0")
-		os.Exit(1)
+		if attempts < 1 {
+			fmt.Fprintln(os.Stderr, "ATTEMPTS must be more than 0")
+			os.Exit(1)
+		}
 	}
 
 	response, err := http.Get(pageUrl.String())
 	if err != nil {
 		panic(err)
 	}
-	playlistUrl, err := getPlaylistUrl(response.Body, pageUrl.Scheme)
+	playlistUrl, err := getPlaylistUrl(response.Body, pageUrl)
 	if err != nil {
 		panic(err)
 	}
-	err = loadVideo(playlistUrl, resolution, attempts)
+	response, err = http.Get(playlistUrl.String())
+	if err != nil {
+		panic(err)
+	}
+	chunkListUrl, err := getChunkListUrl(response.Body, resolution)
+	if err != nil {
+		panic(err)
+	}
+	response, err = http.Get(chunkListUrl.String())
+	if err != nil {
+		panic(err)
+	}
+	err = loadVideo(response.Body, chunkListUrl, attempts, routines)
 	if err != nil {
 		panic(err)
 	}
