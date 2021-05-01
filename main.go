@@ -128,7 +128,6 @@ func loadVideo(playlistUrl *url.URL, resolution string, attempts int) error {
 func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 	tokenizer := html.NewTokenizer(reader)
 
-	video_flag := false
 	for {
 		tokenType := tokenizer.Next()
 		switch tokenType {
@@ -137,15 +136,7 @@ func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 			case html.StartTagToken:
 				tagNameBytes, hasAttr := tokenizer.TagName()
 				tagName := string(tagNameBytes)
-				if tagName == "video" && hasAttr {
-					var keyBytes, valueBytes []byte
-					key, value, moreAttr := "", "", true
-					for key != "id" && moreAttr {
-						keyBytes, valueBytes, moreAttr = tokenizer.TagAttr()
-						key, value = string(keyBytes), string(valueBytes)
-					}
-					video_flag = (key == "id" && value == "video")
-				} else if video_flag && tagName == "source" && hasAttr {
+				if tagName == "source" && hasAttr {
 					var keyBytes, valueBytes []byte
 					key, value, moreAttr := "", "", true
 					for key != "src" && moreAttr {
@@ -159,12 +150,6 @@ func getPlaylistUrl(reader io.Reader, scheme string) (*url.URL, error) {
 						}
 						return playlistUrl, nil
 					}
-				}
-			case html.EndTagToken:
-				tagNameBytes, _ := tokenizer.TagName()
-				tagName := string(tagNameBytes)
-				if video_flag && tagName == "video" {
-					video_flag = false
 				}
 		}
 	}
