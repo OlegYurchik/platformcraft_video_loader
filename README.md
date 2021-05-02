@@ -6,22 +6,28 @@
 go build
 ```
 
-## Run
+## Usage
 
-```shell
-platformcraft_video_loader <URL> <RES> [<ROUTINES>] [<ATTEMPTS>] > output.mp4
 ```
+usage: platformcraft_video_loader [-h|--help] -u|--url "<value>"
+                                  -r|--resolution "<value>" [-g|--goroutines
+                                  <integer>] [-a|--attempts <integer>]
 
-Where `<URL>` - url of page with video, `<RES>` - resolution,
-`<ROUTINES>` - parralel working routines count, `<ATTEMPTS>` - attempts count for retry,
-`<output.mp4>` - filename for save result file
+                                  Video loader from PlatformCraft
 
-By default `ATTEMPTS` is 3, `ROUTINES` is 1
+Arguments:
+
+  -h  --help        Print help information
+  -u  --url         Video URL for downloading
+  -r  --resolution  Set video resolution
+  -g  --goroutines  Max count of parallel working goroutines. Default: 1
+  -a  --attempts    Count of retry attempts if downloaded is failed. Default: 3
+```
 
 Example:
 
 ```shell
 platformcraft_video_loader \
-    http://video.platformcraft.ru/embed/60506db30e47cf1a472041b4 \
-    1280x720 > output.mp4
+    -u http://video.platformcraft.ru/embed/60506db30e47cf1a472041b4 \
+    -r 1280x720 > output.mp4
 ```
