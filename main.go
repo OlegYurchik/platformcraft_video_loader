@@ -20,7 +20,7 @@ import (
 
 type empty struct{}
 
-func loadChunk(chunkUrl *url.URL, attempts int, doneCh chan empty, dataCh chan<-[]byte) {
+func loadChunk(chunkUrl *url.URL, attempts int, doneCh <-chan empty, dataCh chan<-[]byte) {
 	defer func(){<-doneCh}()
 
 	action := func(chunkUrl *url.URL, dataCh chan<-[]byte) error {
@@ -48,12 +48,14 @@ func loadChunk(chunkUrl *url.URL, attempts int, doneCh chan empty, dataCh chan<-
 	var multiplier float32 = 1
 	err := action(chunkUrl, dataCh)
 	for err != nil && attempt < attempts {
+		attempt++
 		fmt.Fprintln(
 			os.Stderr,
-			fmt.Sprintf("Get error from '%s': %s", chunkUrl.String(), err.Error()),
+			fmt.Sprintf("Get error from '%s'", chunkUrl.String()),
 		)
+		fmt.Fprintln(os.Stderr, err.Error())
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("Retry: attempt %d", attempt))
 		time.Sleep(1000 * time.Duration(multiplier) * time.Millisecond)
-		attempt++
 		multiplier *= rand.Float32() * 10.0
 		err = action(chunkUrl, dataCh)
 	}
@@ -88,6 +90,7 @@ func loadVideo(reader io.Reader, chunkListUrl *url.URL, attempts int, routines i
 		wg.Add(1)
 		for _, dataCh := range dataChs {
 			os.Stdout.Write(<-dataCh)
+			close(dataCh)
 		}
 		wg.Done()
 	}()
@@ -97,6 +100,7 @@ func loadVideo(reader io.Reader, chunkListUrl *url.URL, attempts int, routines i
 		go loadChunk(chunkUrl, attempts, doneCh, dataChs[index])
 	}
 	wg.Wait()
+	close(doneCh)
 
 	return nil
 }
@@ -151,6 +155,7 @@ func getPlaylistUrl(reader io.Reader, pageUrl *url.URL) (*url.URL, error) {
 				return nil, tokenizer.Err()
 			case html.StartTagToken:
 				tagName, hasAttr := tokenizer.TagName()
+				// Get attributes from "source" tag
 				if string(tagName) == "source" && hasAttr {
 					for key != "src" && hasAttr {
 						keyBytes, valueBytes, hasAttr = tokenizer.TagAttr()
