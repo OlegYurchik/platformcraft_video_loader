@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -65,7 +66,7 @@ func loadChunk(chunkUrl *url.URL, attempts int, doneCh <-chan empty, dataCh chan
 	}
 }
 
-func loadVideo(reader io.ReadCloser, chunkListUrl *url.URL, attempts int, goroutines int) error {
+func loadVideo(reader io.Reader, chunkListUrl *url.URL, attempts int, goroutines int) error {
 	scanner := bufio.NewScanner(reader)
 	chunkUrlsList := []*url.URL{}
 	for scanner.Scan() {
@@ -82,15 +83,15 @@ func loadVideo(reader io.ReadCloser, chunkListUrl *url.URL, attempts int, gorout
 	if err := scanner.Err(); err != nil {
         return err
     }
-	reader.Close()
 
-	var wg sync.WaitGroup
 	doneCh := make(chan empty, goroutines)
 	dataChs := []chan[]byte{}
 	for index := 0; index < len(chunkUrlsList); index++ {
 		dataCh := make(chan []byte, 1)
 		dataChs = append(dataChs, dataCh)
 	}
+
+	var wg sync.WaitGroup
 	go func() {
 		wg.Add(1)
 		for _, dataCh := range dataChs {
@@ -99,7 +100,6 @@ func loadVideo(reader io.ReadCloser, chunkListUrl *url.URL, attempts int, gorout
 		}
 		wg.Done()
 	}()
-
 	for index, chunkUrl := range chunkUrlsList {
 		doneCh <- empty{}
 		go loadChunk(chunkUrl, attempts, doneCh, dataChs[index])
@@ -110,9 +110,7 @@ func loadVideo(reader io.ReadCloser, chunkListUrl *url.URL, attempts int, gorout
 	return nil
 }
 
-func getChunkListUrl(reader io.ReadCloser, resolution string) (*url.URL, error) {
-	defer reader.Close()
-
+func getChunkListUrl(reader io.Reader, resolution string) (*url.URL, error) {
 	var chunkListUrl *url.URL
 	var err error
 
@@ -150,9 +148,7 @@ func getChunkListUrl(reader io.ReadCloser, resolution string) (*url.URL, error) 
 	)
 }
 
-func getPlaylistUrl(reader io.ReadCloser, pageUrl *url.URL) (*url.URL, error) {
-	defer reader.Close()
-
+func getPlaylistUrl(reader io.Reader, pageUrl *url.URL) (*url.URL, error) {
 	var keyBytes, valueBytes []byte
 	var key, value string
 	tokenizer := html.NewTokenizer(reader)
@@ -240,7 +236,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	playlistUrl, err := getPlaylistUrl(response.Body, pageUrl)
+	pageBytes, err := ioutil.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		panic(err)
+	}
+	pageReader := bytes.NewReader(pageBytes)
+	playlistUrl, err := getPlaylistUrl(pageReader, pageUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -248,7 +250,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	chunkListUrl, err := getChunkListUrl(response.Body, *resolution)
+	playlistBytes, err := ioutil.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		panic(err)
+	}
+	playlistReader := bytes.NewReader(playlistBytes)
+	chunkListUrl, err := getChunkListUrl(playlistReader, *resolution)
 	if err != nil {
 		panic(err)
 	}
@@ -256,7 +264,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = loadVideo(response.Body, chunkListUrl, *attempts, *goroutines)
+	chunkListBytes, err := ioutil.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		panic(err)
+	}
+	chunkListReader := bytes.NewReader(chunkListBytes)
+	err = loadVideo(chunkListReader, chunkListUrl, *attempts, *goroutines)
 	if err != nil {
 		panic(err)
 	}
